@@ -103,9 +103,16 @@ if (isPrint || hasFlag("-r") || hasFlag("--resume") || hasFlag("-c") || hasFlag(
     process.stderr.write("Usage: grok --single <PROMPT> --cwd <CWD> --agent <NAME> --sandbox <PROFILE> --always-approve --output-format <OUTPUT_FORMAT>\\n");
     process.exit(2);
   }
-  const wantsJson = hasFlag("--json-schema") || flagValue("--output-format") === "json";
+  // Two different json shapes, and the difference is the whole point.
+  //   --json-schema        the model is constrained to the schema, and the
+  //                        schema is the ROOT of stdout.
+  //   --output-format json (no schema) one envelope after completion, the
+  //                        answer under .text and the reasoning under .thought.
+  // Conflating them is how a consumer ends up treating narration as the answer.
+  const wantsSchema = hasFlag("--json-schema");
+  const wantsEnvelope = !wantsSchema && flagValue("--output-format") === "json";
 
-  if (wantsJson || /critique|adversarial|structured|Return only valid JSON/i.test(prompt)) {
+  if (wantsSchema || /critique|adversarial|structured|Return only valid JSON/i.test(prompt)) {
     const payload = {
       verdict: "approve",
       summary: "No material issues found in the reviewed changes.",
@@ -113,12 +120,32 @@ if (isPrint || hasFlag("-r") || hasFlag("--resume") || hasFlag("-c") || hasFlag(
       next_steps: ["Ship it."]
     };
     process.stdout.write(JSON.stringify(payload) + "\\n");
-  } else if (/stop-gate review|ALLOW:|BLOCK:/i.test(prompt)) {
-    process.stdout.write("ALLOW: previous turn did not make code changes\\n");
+    process.exit(0);
+  }
+
+  let answer;
+  if (/stop-gate review|ALLOW:|BLOCK:/i.test(prompt)) {
+    answer = "ALLOW: previous turn did not make code changes\\n";
   } else if (/code review|Review the provided repository|Reviewing/i.test(prompt) || hasFlag("--agent")) {
-    process.stdout.write("Reviewed uncommitted changes.\\nNo material issues found.\\n");
+    answer = "Reviewed uncommitted changes.\\nNo material issues found.\\n";
   } else {
-    process.stdout.write("Handled the requested task.\\n");
+    answer = "Handled the requested task.\\n";
+  }
+
+  if (wantsEnvelope) {
+    process.stdout.write(
+      JSON.stringify({
+        text: answer,
+        stopReason: "end_turn",
+        sessionId: "00000000-0000-4000-8000-000000000000",
+        // Reasoning is a separate field, never part of the answer. A fake that
+        // omitted it could not catch a consumer that concatenates the two.
+        thought: "fake grok reasoning that must never reach the answer",
+        usage: { input_tokens: 1, output_tokens: 1 }
+      }) + "\\n"
+    );
+  } else {
+    process.stdout.write(answer);
   }
   process.exit(0);
 }

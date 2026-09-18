@@ -119,7 +119,10 @@ if (args.includes("version") || args.includes("--version")) {
     if (Date.now() > deadline) process.exit(2);
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
   }
-  console.log("Finished fake work.");
+  const answer = "Finished fake work.";
+  // Like the real CLI: --output-format json wraps the answer in an envelope.
+  const format = args[args.indexOf("--output-format") + 1];
+  console.log(format === "json" ? JSON.stringify({ text: answer, stopReason: "end_turn" }) : answer);
 }
 `, { mode: 0o755 });
   fixture.env.GROK_BINARY = fakeScript;
