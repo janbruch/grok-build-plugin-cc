@@ -127,7 +127,9 @@ test("runHeadlessAgent falls back without --json-schema when grok rejects the fl
   assert.equal(result.args.includes("--json-schema"), false);
   assert.ok(result.args.includes("--output-format"));
   assert.equal(result.args[result.args.indexOf("--output-format") + 1], "json");
-  assert.equal(JSON.parse(result.finalMessage).verdict, "approve");
+  // Without --json-schema the CLI wraps the answer in its envelope, so the
+  // review is under .text, not at the root; the bridge does the unwrapping.
+  assert.equal(JSON.parse(JSON.parse(result.finalMessage).text).verdict, "approve");
 });
 
 test("runHeadlessAgent captures stdout and session id from fake grok", async () => {

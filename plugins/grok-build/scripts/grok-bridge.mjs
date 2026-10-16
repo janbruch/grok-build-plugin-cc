@@ -263,6 +263,30 @@ function answerFromEnvelope(finalMessage) {
   return { ok: true, text: envelope.text, error: "" };
 }
 
+// The schema object is the root of stdout only when the run that produced it
+// was passed --json-schema. When the CLI rejects that flag, the retry runs
+// without it, and the answer arrives in the envelope like any other json run:
+// unwrap it, then parse the answer strictly — no fences, no brace slicing.
+function structuredOutputFor(result, fallback) {
+  if (result.args?.includes("--json-schema")) {
+    return parseStructuredOutput(result.finalMessage, fallback);
+  }
+  const answer = answerFromEnvelope(result.finalMessage);
+  if (!answer.ok) {
+    return { ...fallback, parsed: null, parseError: answer.error, rawOutput: "" };
+  }
+  try {
+    return { ...fallback, parsed: JSON.parse(answer.text), parseError: null, rawOutput: answer.text };
+  } catch (error) {
+    return {
+      ...fallback,
+      parsed: null,
+      parseError: `structured answer is not JSON: ${error.message}`,
+      rawOutput: answer.text
+    };
+  }
+}
+
 async function buildCheckReport(cwd, actionsTaken = []) {
   const nodeStatus = binaryAvailable("node", ["--version"], { cwd });
   const grokStatus = getGrokAvailability(cwd);
@@ -428,7 +452,7 @@ async function executeReviewRun(request) {
   });
 
   if (structured) {
-    const parsed = parseStructuredOutput(result.finalMessage, {
+    const parsed = structuredOutputFor(result, {
       status: result.status,
       failureMessage: result.stderr
     });

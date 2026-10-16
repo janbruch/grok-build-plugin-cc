@@ -7,7 +7,7 @@ import { writeExecutable } from "./helpers.mjs";
 /**
  * Install a fake `grok` binary that responds to version/models/-p/import for hermetic tests.
  * @param {string} binDir directory that will be prepended to PATH
- * @param {"default"|"not-logged-in"|"not-authenticated"|"fail-print"|"import-ok"|"reject-json-schema"|"api-key"|"deployment-key"} scenario
+ * @param {"default"|"not-logged-in"|"not-authenticated"|"fail-print"|"import-ok"|"reject-json-schema"|"reject-json-schema-narration"|"api-key"|"deployment-key"} scenario
  */
 export function installFakeGrok(binDir, scenario = "default") {
   fs.mkdirSync(binDir, { recursive: true });
@@ -98,7 +98,7 @@ if (isPrint || hasFlag("-r") || hasFlag("--resume") || hasFlag("-c") || hasFlag(
   }
 
   const prompt = printIndex !== -1 ? (argv[printIndex + 1] ?? "") : "";
-  if (scenario === "reject-json-schema" && hasFlag("--json-schema")) {
+  if (scenario.startsWith("reject-json-schema") && hasFlag("--json-schema")) {
     process.stderr.write("error: unexpected argument '--json-schema' found\\n");
     process.stderr.write("Usage: grok --single <PROMPT> --cwd <CWD> --agent <NAME> --sandbox <PROFILE> --always-approve --output-format <OUTPUT_FORMAT>\\n");
     process.exit(2);
@@ -109,9 +109,13 @@ if (isPrint || hasFlag("-r") || hasFlag("--resume") || hasFlag("-c") || hasFlag(
   //   --output-format json (no schema) one envelope after completion, the
   //                        answer under .text and the reasoning under .thought.
   // Conflating them is how a consumer ends up treating narration as the answer.
+  // The shape follows the flags, never the prompt: a prompt that embeds a
+  // schema (the fallback when --json-schema is rejected) is still answered
+  // inside the envelope.
   const wantsSchema = hasFlag("--json-schema");
   const wantsEnvelope = !wantsSchema && flagValue("--output-format") === "json";
 
+  let answer;
   if (wantsSchema || /critique|adversarial|structured|Return only valid JSON/i.test(prompt)) {
     const payload = {
       verdict: "approve",
@@ -119,12 +123,12 @@ if (isPrint || hasFlag("-r") || hasFlag("--resume") || hasFlag("-c") || hasFlag(
       findings: [],
       next_steps: ["Ship it."]
     };
-    process.stdout.write(JSON.stringify(payload) + "\\n");
-    process.exit(0);
-  }
-
-  let answer;
-  if (/stop-gate review|ALLOW:|BLOCK:/i.test(prompt)) {
+    answer = JSON.stringify(payload) + "\\n";
+    if (scenario === "reject-json-schema-narration") {
+      // An unconstrained model narrating around an example of the shape.
+      answer = "I read the diff. A review would look like " + JSON.stringify(payload) + " but I have concerns.\\n";
+    }
+  } else if (/stop-gate review|ALLOW:|BLOCK:/i.test(prompt)) {
     answer = "ALLOW: previous turn did not make code changes\\n";
   } else if (/code review|Review the provided repository|Reviewing/i.test(prompt) || hasFlag("--agent")) {
     answer = "Reviewed uncommitted changes.\\nNo material issues found.\\n";

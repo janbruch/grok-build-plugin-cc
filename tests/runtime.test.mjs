@@ -189,6 +189,20 @@ test("critique succeeds when grok --single rejects --json-schema", () => {
   assert.match(prompt, /Return only valid JSON matching this schema/);
 });
 
+test("critique fallback refuses narration instead of brace-slicing a verdict out of it", () => {
+  const { repo, binDir, pluginDataDir, fakeGrokLog } = setupReviewableRepo("reject-json-schema-narration");
+
+  const result = run("node", [SCRIPT, "critique", "--json", "focus on docs"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir, { FAKE_GROK_LOG: fakeGrokLog })
+  });
+
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.result, null);
+  assert.ok(payload.parseError);
+  assert.match(payload.rawOutput, /^I read the diff/);
+});
+
 test("critique forwards --model and --effort to grok", () => {
   const { repo, binDir, pluginDataDir, fakeGrokLog } = setupReviewableRepo();
 
