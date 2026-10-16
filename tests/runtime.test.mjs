@@ -296,6 +296,30 @@ test("review returns the final answer, never the narration before it", () => {
   assert.equal(JSON.parse(result.stdout).grok.stdout, "Reviewed uncommitted changes.\nNo material issues found.");
 });
 
+test("a failed run reports grok's own error, not the missing answer", () => {
+  const { repo, binDir, pluginDataDir } = setupReviewableRepo("fail-print");
+
+  const result = run("node", [SCRIPT, "run", "do a small thing"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stdout + result.stderr, /fake grok failed the print run/);
+});
+
+test("a failed review reports grok's own error, not the missing answer", () => {
+  const { repo, binDir, pluginDataDir } = setupReviewableRepo("fail-print");
+
+  const result = run("node", [SCRIPT, "review", "--json"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(JSON.parse(result.stdout).grok.stderr, /fake grok failed the print run/);
+});
+
 test("a review's job summary comes from the answer, not the raw output", () => {
   const { repo, binDir, pluginDataDir } = setupReviewableRepo();
 

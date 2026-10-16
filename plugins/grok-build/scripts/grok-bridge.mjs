@@ -229,6 +229,13 @@ function firstMeaningfulLine(text, fallback) {
   return line ?? fallback;
 }
 
+// A CLI that failed explains itself on stderr, and that is the cause to report.
+// The extraction error explains only a run that exited 0 without a readable
+// answer; for a failed run it is a consequence, not the cause.
+function failureReason(result, answer) {
+  return result.status !== 0 ? result.stderr || answer.error : answer.error;
+}
+
 // The schema object is the root of stdout only when the run that produced it
 // was passed --json-schema. When the CLI rejects that flag, the retry asks for
 // the message stream instead: read the final block, then parse it strictly —
@@ -464,7 +471,7 @@ async function executeReviewRun(request) {
   // message stream, never the stream itself.
   const answer = answerFromMessageStream(result.finalMessage);
   const exitStatus = result.status === 0 && !answer.ok ? 1 : result.status;
-  const stderr = exitStatus === 0 ? result.stderr : answer.error || result.stderr;
+  const stderr = exitStatus === 0 ? result.stderr : failureReason(result, answer);
   const payload = {
     review: reviewName,
     target,
@@ -550,8 +557,7 @@ async function executeTaskRun(request) {
   // one, with a zero status beside it.
   const exitStatus = result.status === 0 && !answer.ok ? 1 : result.status;
   const rawOutput = answer.text;
-  const failureMessage =
-    exitStatus === 0 ? "" : answer.error || result.stderr || "";
+  const failureMessage = exitStatus === 0 ? "" : failureReason(result, answer) || "";
   const rendered = renderTaskResult(
     {
       rawOutput,
