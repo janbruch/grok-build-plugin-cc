@@ -120,9 +120,12 @@ if (args.includes("version") || args.includes("--version")) {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
   }
   const answer = "Finished fake work.";
-  // Like the real CLI: --output-format json wraps the answer in an envelope.
+  // Like the real CLI: streaming-messages-json is NDJSON ending in a result event.
   const format = args[args.indexOf("--output-format") + 1];
-  console.log(format === "json" ? JSON.stringify({ text: answer, stopReason: "end_turn" }) : answer);
+  console.log(format === "streaming-messages-json"
+    ? [{ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: answer }] } },
+       { type: "result", subtype: "success", is_error: false, result: answer }].map((e) => JSON.stringify(e)).join("\\n")
+    : answer);
 }
 `, { mode: 0o755 });
   fixture.env.GROK_BINARY = fakeScript;

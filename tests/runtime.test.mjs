@@ -184,7 +184,7 @@ test("critique succeeds when grok --single rejects --json-schema", () => {
   assert.equal(payload.result?.verdict, "approve");
   const argv = lastFakeGrokArgv(fakeGrokLog);
   assert.equal(argv.includes("--json-schema"), false);
-  assert.equal(argv[argv.indexOf("--output-format") + 1], "json");
+  assert.equal(argv[argv.indexOf("--output-format") + 1], "streaming-messages-json");
   const prompt = argv[argv.indexOf("-p") + 1];
   assert.match(prompt, /Return only valid JSON matching this schema/);
 });
@@ -263,6 +263,53 @@ test("run delegates through fake grok and stores a finished job", () => {
     assert.ok(jobs.length >= 1);
     assert.equal(jobs[0].jobClass, "task");
     assert.equal(jobs[0].status, "completed");
+  } finally {
+    if (previous == null) {
+      delete process.env.CLAUDE_PLUGIN_DATA;
+    } else {
+      process.env.CLAUDE_PLUGIN_DATA = previous;
+    }
+  }
+});
+
+test("run returns the final answer, never the narration before it", () => {
+  const { repo, binDir, pluginDataDir } = setupReviewableRepo();
+
+  const result = run("node", [SCRIPT, "run", "--json", "do a small thing"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).rawOutput, "Handled the requested task.");
+});
+
+test("review returns the final answer, never the narration before it", () => {
+  const { repo, binDir, pluginDataDir } = setupReviewableRepo();
+
+  const result = run("node", [SCRIPT, "review", "--json"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).grok.stdout, "Reviewed uncommitted changes.\nNo material issues found.");
+});
+
+test("a review's job summary comes from the answer, not the raw output", () => {
+  const { repo, binDir, pluginDataDir } = setupReviewableRepo();
+
+  const result = run("node", [SCRIPT, "review"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+  assert.equal(result.status, 0, result.stderr);
+
+  const previous = process.env.CLAUDE_PLUGIN_DATA;
+  process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
+  try {
+    const [job] = listJobs(repo);
+    assert.equal(job.summary, "Reviewed uncommitted changes.");
   } finally {
     if (previous == null) {
       delete process.env.CLAUDE_PLUGIN_DATA;

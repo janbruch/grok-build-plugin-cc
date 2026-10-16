@@ -11,6 +11,7 @@ import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
 import {
+  answerFromMessageStream,
   buildReviewPrompt,
   DEFAULT_CONTINUE_PROMPT,
   getGrokAuthStatus,
@@ -228,50 +229,15 @@ function firstMeaningfulLine(text, fallback) {
   return line ?? fallback;
 }
 
-// Headless `--output-format json` emits one object once the turn completes, and
-// `.text` is the answer: reasoning arrives separately under `.thought`.
-// `--output-format plain` is a human stream that concatenates commentary turns
-// and the final answer with no separator, so the answer ends up glued to the
-// last sentence of the narration — e.g. `...cases they didn't pin.VERDICT:
-// REVISE`. Anything that treats that stream as the answer consumes narration
-// along with it, and a consumer that searches the stream for the answer can
-// pick up text the model never issued as one.
-//
-// Deliberately NOT `parseStructuredOutput`: on parse failure that helper returns
-// `rawOutput: text` — the original stream — and it brace-slices from the first
-// `{` to the last `}`, so a plain body that merely contains a JSON example
-// parses as success. Both paths hand narration back as though it were the
-// answer, which is what this function exists to prevent.
-//
-// Fails closed. No fence stripping, no brace slicing, no fallback to plain.
-function answerFromEnvelope(finalMessage) {
-  if (typeof finalMessage !== "string" || !finalMessage.trim()) {
-    return { ok: false, text: "", error: "grok produced no output" };
-  }
-  let envelope;
-  try {
-    envelope = JSON.parse(finalMessage);
-  } catch (error) {
-    return { ok: false, text: "", error: `grok output is not JSON: ${error.message}` };
-  }
-  if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
-    return { ok: false, text: "", error: "grok output is not a JSON object" };
-  }
-  if (typeof envelope.text !== "string" || !envelope.text.trim()) {
-    return { ok: false, text: "", error: "grok output has no usable `text` field" };
-  }
-  return { ok: true, text: envelope.text, error: "" };
-}
-
 // The schema object is the root of stdout only when the run that produced it
-// was passed --json-schema. When the CLI rejects that flag, the retry runs
-// without it, and the answer arrives in the envelope like any other json run:
-// unwrap it, then parse the answer strictly — no fences, no brace slicing.
+// was passed --json-schema. When the CLI rejects that flag, the retry asks for
+// the message stream instead: read the final block, then parse it strictly —
+// no fences, no brace slicing.
 function structuredOutputFor(result, fallback) {
   if (result.args?.includes("--json-schema")) {
     return parseStructuredOutput(result.finalMessage, fallback);
   }
-  const answer = answerFromEnvelope(result.finalMessage);
+  const answer = answerFromMessageStream(result.finalMessage);
   if (!answer.ok) {
     return { ...fallback, parsed: null, parseError: answer.error, rawOutput: "" };
   }
@@ -446,7 +412,7 @@ async function executeReviewRun(request) {
     sandbox: "read-only",
     model: request.model,
     effort: request.effort,
-    outputFormat: "json",
+    outputFormat: structured ? "json" : "streaming-messages-json",
     jsonSchema: structured ? readOutputSchema(REVIEW_SCHEMA) : undefined,
     onProgress: request.onProgress
   });
@@ -494,10 +460,9 @@ async function executeReviewRun(request) {
     };
   }
 
-  // Unstructured review now asks for json too, so the envelope must be unwrapped
-  // here as well — otherwise this path would render the envelope instead of the
-  // review. Same fail-closed rule as the run path.
-  const answer = answerFromEnvelope(result.finalMessage);
+  // Same fail-closed rule as the run path: the review is the final block of the
+  // message stream, never the stream itself.
+  const answer = answerFromMessageStream(result.finalMessage);
   const exitStatus = result.status === 0 && !answer.ok ? 1 : result.status;
   const stderr = exitStatus === 0 ? result.stderr : answer.error || result.stderr;
   const payload = {
@@ -525,7 +490,7 @@ async function executeReviewRun(request) {
     turnId: null,
     payload,
     rendered,
-    summary: firstMeaningfulLine(result.finalMessage, `${reviewName} completed.`),
+    summary: firstMeaningfulLine(answer.text, firstMeaningfulLine(stderr, `${reviewName} completed.`)),
     jobTitle: `Grok Build ${reviewName}`,
     jobClass: "review",
     targetLabel: target.label
@@ -574,11 +539,11 @@ async function executeTaskRun(request) {
     maxTurns: request.maxTurns,
     allow: request.allow,
     deny: request.deny,
-    outputFormat: "json",
+    outputFormat: "streaming-messages-json",
     onProgress: request.onProgress
   });
 
-  const answer = answerFromEnvelope(result.finalMessage);
+  const answer = answerFromMessageStream(result.finalMessage);
   // A run that exits 0 but yields no readable answer is a failure, not an empty
   // success. Callers take `rawOutput` as the answer itself — a verdict, a patch,
   // a report — and must not be handed narration, or an empty string dressed as
@@ -1264,4 +1229,4 @@ if (isMain) {
   });
 }
 
-export { main, readStoredJobWithRetry, answerFromEnvelope };
+export { main, readStoredJobWithRetry };

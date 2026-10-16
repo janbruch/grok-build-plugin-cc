@@ -103,17 +103,26 @@ if (isPrint || hasFlag("-r") || hasFlag("--resume") || hasFlag("-c") || hasFlag(
     process.stderr.write("Usage: grok --single <PROMPT> --cwd <CWD> --agent <NAME> --sandbox <PROFILE> --always-approve --output-format <OUTPUT_FORMAT>\\n");
     process.exit(2);
   }
-  // Two different json shapes, and the difference is the whole point.
+  // Three output shapes, and the differences are the whole point. Each one is
+  // modelled on grok 1.0.41 as observed, because a fake that is kinder than the
+  // CLI passes code the CLI breaks.
   //   --json-schema        the model is constrained to the schema, and the
   //                        schema is the ROOT of stdout.
-  //   --output-format json (no schema) one envelope after completion, the
-  //                        answer under .text and the reasoning under .thought.
-  // Conflating them is how a consumer ends up treating narration as the answer.
+  //   --output-format json one envelope, reasoning under .thought. Its .text
+  //                        joins every assistant text block of every turn with
+  //                        no separator, so narration arrives welded to the
+  //                        answer, exactly as in plain.
+  //   --output-format streaming-messages-json
+  //                        NDJSON, one whole message per line, then a terminal
+  //                        result event. The answer is the last text block of
+  //                        the last assistant message.
   // The shape follows the flags, never the prompt: a prompt that embeds a
-  // schema (the fallback when --json-schema is rejected) is still answered
-  // inside the envelope.
+  // schema (the fallback when --json-schema is rejected) is not answered at
+  // the root.
   const wantsSchema = hasFlag("--json-schema");
-  const wantsEnvelope = !wantsSchema && flagValue("--output-format") === "json";
+  const format = wantsSchema ? "schema" : flagValue("--output-format");
+  // What an agent says before it uses a tool. It is not the answer.
+  const narration = "I'll look at the request before answering.";
 
   let answer;
   if (wantsSchema || /critique|adversarial|structured|Return only valid JSON/i.test(prompt)) {
@@ -136,18 +145,46 @@ if (isPrint || hasFlag("-r") || hasFlag("--resume") || hasFlag("-c") || hasFlag(
     answer = "Handled the requested task.\\n";
   }
 
-  if (wantsEnvelope) {
+  const sessionId = "00000000-0000-4000-8000-000000000000";
+  const reasoning = "fake grok reasoning that must never reach the answer";
+  if (format === "json") {
     process.stdout.write(
       JSON.stringify({
-        text: answer,
+        text: narration + answer.trimEnd(),
         stopReason: "end_turn",
-        sessionId: "00000000-0000-4000-8000-000000000000",
-        // Reasoning is a separate field, never part of the answer. A fake that
-        // omitted it could not catch a consumer that concatenates the two.
-        thought: "fake grok reasoning that must never reach the answer",
+        sessionId,
+        thought: reasoning,
         usage: { input_tokens: 1, output_tokens: 1 }
       }) + "\\n"
     );
+  } else if (format === "streaming-messages-json") {
+    const events = [
+      { type: "system", subtype: "init", session_id: sessionId },
+      {
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: reasoning },
+            { type: "text", text: narration },
+            { type: "tool_use", id: "call-1", name: "read_file", input: {} }
+          ]
+        },
+        session_id: sessionId
+      },
+      {
+        type: "user",
+        message: { role: "user", content: [{ type: "tool_result", tool_use_id: "call-1", content: "ok", is_error: false }] },
+        session_id: sessionId
+      },
+      {
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: answer.trimEnd() }] },
+        session_id: sessionId
+      },
+      { type: "result", subtype: "success", is_error: false, result: answer.trimEnd(), session_id: sessionId }
+    ];
+    process.stdout.write(events.map((event) => JSON.stringify(event)).join("\\n") + "\\n");
   } else {
     process.stdout.write(answer);
   }

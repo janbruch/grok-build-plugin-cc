@@ -73,7 +73,7 @@ Read-only review of local git state:
 Runs:
 
 ```bash
-grok -p <prompt> --agent explore --permission-mode plan --sandbox read-only --cwd <ws> --output-format plain
+grok -p <prompt> --agent explore --permission-mode plan --sandbox read-only --cwd <ws> --output-format streaming-messages-json
 ```
 
 Optional: pass `--model` / `--effort` (`low`|`medium`|`high`). If omitted, Grok chooses defaults.

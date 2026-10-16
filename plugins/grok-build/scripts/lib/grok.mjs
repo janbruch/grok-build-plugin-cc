@@ -193,6 +193,65 @@ function firstLine(text) {
     .find(Boolean);
 }
 
+// `--output-format plain` concatenates every assistant text block of every turn
+// with no separator, so the answer arrives glued to the narration before it:
+// `...then finish with the verdict line.VERDICT: OK`. On any run that uses a
+// tool, the flat `--output-format json` envelope does the same inside `.text`
+// (grok 1.0.41). A consumer that takes either as the answer is handed narration
+// with it, and one that searches it for the answer can match text the model
+// never issued as one.
+//
+// `--output-format streaming-messages-json` keeps the message boundaries:
+// NDJSON, one whole message per line, ending in a `result` event that says
+// whether the run completed. The answer is the last text block of the last
+// assistant message, a structural boundary rather than a search. Not the result
+// event's `.result`, which joins the final message's text blocks the same way.
+//
+// Fails closed: a line that is not a JSON object, a missing or unsuccessful
+// result event, or a final message without text yields no answer and a stated
+// reason. It never falls back to an earlier message, whose text is narration. A
+// weld inside a single block is returned whole; splitting it would be a search.
+export function answerFromMessageStream(stdout) {
+  const refuse = (error) => ({ ok: false, text: "", error });
+  if (typeof stdout !== "string" || !stdout.trim()) {
+    return refuse("grok produced no output");
+  }
+  const events = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    if (!line.trim()) {
+      continue;
+    }
+    let event;
+    try {
+      event = JSON.parse(line);
+    } catch {
+      return refuse("grok output is not a message stream: a line is not JSON");
+    }
+    if (!event || typeof event !== "object" || Array.isArray(event)) {
+      return refuse("grok output is not a message stream: a line is not a JSON object");
+    }
+    events.push(event);
+  }
+  const terminal = events[events.length - 1];
+  if (terminal.type !== "result") {
+    return refuse("grok output ends without a result event; the run did not complete");
+  }
+  if (terminal.subtype !== "success" || terminal.is_error) {
+    return refuse(`grok run did not succeed (subtype: ${terminal.subtype}, is_error: ${terminal.is_error})`);
+  }
+  const final = events.findLast((event) => event.type === "assistant");
+  if (!final) {
+    return refuse("grok output has no assistant message");
+  }
+  const content = Array.isArray(final.message?.content) ? final.message.content : [];
+  const texts = content.filter((block) => block?.type === "text" && typeof block.text === "string");
+  const answer = texts.length ? texts[texts.length - 1].text : "";
+  if (!answer.trim()) {
+    return refuse("grok's final message has no text");
+  }
+  return { ok: true, text: answer, error: "" };
+}
+
 function emitProgress(onProgress, message, phase = null, extra = {}) {
   if (!onProgress || !message) {
     return;
@@ -345,6 +404,9 @@ export function runHeadlessAgent(cwd, options = {}) {
         resolve(
           runHeadlessAgent(cwd, {
             ...fallbackOptions,
+            // Without the schema, json would weld narration onto the answer;
+            // the message stream keeps the review in a block of its own.
+            outputFormat: "streaming-messages-json",
             sessionId: options.resumeSessionId || options.continueLast ? undefined : sessionId
           })
         );

@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { buildEnv, installFakeGrok } from "./fake-grok-fixture.mjs";
 import { makeTempDir } from "./helpers.mjs";
 import {
+  answerFromMessageStream,
   buildReviewPrompt,
   getGrokAuthStatus,
   getGrokAvailability,
@@ -126,10 +127,10 @@ test("runHeadlessAgent falls back without --json-schema when grok rejects the fl
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.args.includes("--json-schema"), false);
   assert.ok(result.args.includes("--output-format"));
-  assert.equal(result.args[result.args.indexOf("--output-format") + 1], "json");
-  // Without --json-schema the CLI wraps the answer in its envelope, so the
-  // review is under .text, not at the root; the bridge does the unwrapping.
-  assert.equal(JSON.parse(JSON.parse(result.finalMessage).text).verdict, "approve");
+  // Without the schema the flat json envelope welds narration onto the answer,
+  // so the retry asks for the message stream; the review is its final block.
+  assert.equal(result.args[result.args.indexOf("--output-format") + 1], "streaming-messages-json");
+  assert.equal(JSON.parse(answerFromMessageStream(result.finalMessage).text).verdict, "approve");
 });
 
 test("runHeadlessAgent captures stdout and session id from fake grok", async () => {
