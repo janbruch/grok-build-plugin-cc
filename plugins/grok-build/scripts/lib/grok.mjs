@@ -213,6 +213,43 @@ function firstLine(text) {
 // weld inside a single block is returned whole; splitting it would be a search.
 export function answerFromMessageStream(stdout) {
   const refuse = (error) => ({ ok: false, text: "", error });
+  const stream = completedMessageStream(stdout);
+  if (!stream.ok) {
+    return refuse(stream.error);
+  }
+  const final = stream.events.findLast((event) => event.type === "assistant");
+  if (!final) {
+    return refuse("grok output has no assistant message");
+  }
+  const content = Array.isArray(final.message?.content) ? final.message.content : [];
+  const texts = content.filter((block) => block?.type === "text" && typeof block.text === "string");
+  const answer = texts.length ? texts[texts.length - 1].text : "";
+  if (!answer.trim()) {
+    return refuse("grok's final message has no text");
+  }
+  return { ok: true, text: answer, error: "" };
+}
+
+// With --json-schema the result event carries the object the model was held
+// to, as `structured_output`. That is the structured answer. It is read there
+// and nowhere else: the final message may hold no text at all, and its text,
+// when present, is the same weld-prone channel the schema exists to avoid.
+export function structuredOutputFromMessageStream(stdout) {
+  const refuse = (error) => ({ ok: false, value: null, error });
+  const stream = completedMessageStream(stdout);
+  if (!stream.ok) {
+    return refuse(stream.error);
+  }
+  const value = stream.events[stream.events.length - 1].structured_output;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return refuse("grok's result event has no structured_output object");
+  }
+  return { ok: true, value, error: "" };
+}
+
+// Every line a JSON object, the last one a successful result event.
+function completedMessageStream(stdout) {
+  const refuse = (error) => ({ ok: false, events: [], error });
   if (typeof stdout !== "string" || !stdout.trim()) {
     return refuse("grok produced no output");
   }
@@ -239,17 +276,7 @@ export function answerFromMessageStream(stdout) {
   if (terminal.subtype !== "success" || terminal.is_error) {
     return refuse(`grok run did not succeed (subtype: ${terminal.subtype}, is_error: ${terminal.is_error})`);
   }
-  const final = events.findLast((event) => event.type === "assistant");
-  if (!final) {
-    return refuse("grok output has no assistant message");
-  }
-  const content = Array.isArray(final.message?.content) ? final.message.content : [];
-  const texts = content.filter((block) => block?.type === "text" && typeof block.text === "string");
-  const answer = texts.length ? texts[texts.length - 1].text : "";
-  if (!answer.trim()) {
-    return refuse("grok's final message has no text");
-  }
-  return { ok: true, text: answer, error: "" };
+  return { ok: true, events, error: "" };
 }
 
 function emitProgress(onProgress, message, phase = null, extra = {}) {

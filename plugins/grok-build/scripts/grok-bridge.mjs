@@ -16,11 +16,11 @@ import {
   DEFAULT_CONTINUE_PROMPT,
   getGrokAuthStatus,
   getGrokAvailability,
-  parseStructuredOutput,
   readOutputSchema,
   runHeadlessAgent,
   runImport,
-  schemaInstructionsFromPath
+  schemaInstructionsFromPath,
+  structuredOutputFromMessageStream
 } from "./lib/grok.mjs";
 import {
   buildSingleJobSnapshot,
@@ -236,17 +236,29 @@ function failureReason(result, answer) {
   return result.status !== 0 ? result.stderr || answer.error : answer.error;
 }
 
-// The schema object is the root of stdout only when the run that produced it
-// was passed --json-schema. When the CLI rejects that flag, the retry asks for
-// the message stream instead: read the final block, then parse it strictly —
-// no fences, no brace slicing.
+// A run passed --json-schema reports the object on the stream's result event;
+// it is never the root of stdout. When the CLI rejects that flag, the retry
+// has no structured field: read the final block, then parse it strictly — no
+// fences, no brace slicing. Either way a process that exited non-zero is a
+// failed review, even after a result event that said success (a Stop hook can
+// fail the run after it).
 function structuredOutputFor(result, fallback) {
+  const refuse = (reading) => ({
+    ...fallback,
+    parsed: null,
+    parseError: failureReason(result, reading) || `grok exited with status ${result.status}`,
+    rawOutput: ""
+  });
   if (result.args?.includes("--json-schema")) {
-    return parseStructuredOutput(result.finalMessage, fallback);
+    const structured = structuredOutputFromMessageStream(result.finalMessage);
+    if (result.status !== 0 || !structured.ok) {
+      return refuse(structured);
+    }
+    return { ...fallback, parsed: structured.value, parseError: null, rawOutput: JSON.stringify(structured.value) };
   }
   const answer = answerFromMessageStream(result.finalMessage);
-  if (!answer.ok) {
-    return { ...fallback, parsed: null, parseError: answer.error, rawOutput: "" };
+  if (result.status !== 0 || !answer.ok) {
+    return refuse(answer);
   }
   try {
     return { ...fallback, parsed: JSON.parse(answer.text), parseError: null, rawOutput: answer.text };
@@ -419,7 +431,7 @@ async function executeReviewRun(request) {
     sandbox: "read-only",
     model: request.model,
     effort: request.effort,
-    outputFormat: structured ? "json" : "streaming-messages-json",
+    outputFormat: "streaming-messages-json",
     jsonSchema: structured ? readOutputSchema(REVIEW_SCHEMA) : undefined,
     onProgress: request.onProgress
   });

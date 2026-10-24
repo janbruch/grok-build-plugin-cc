@@ -101,7 +101,11 @@ test("runHeadlessAgent passes --json-schema when supported", async () => {
   assert.equal(result.args[result.args.indexOf("--json-schema") + 1], JSON.stringify(schema));
   assert.ok(result.args.includes("--output-format"));
   assert.equal(result.args[result.args.indexOf("--output-format") + 1], "json");
-  assert.equal(JSON.parse(result.finalMessage).verdict, "approve");
+  // The schema does not make the object the root of stdout: it rides on the
+  // envelope beside the welded .text.
+  const envelope = JSON.parse(result.finalMessage);
+  assert.equal(envelope.verdict, undefined);
+  assert.equal(envelope.structuredOutput.verdict, "approve");
 });
 
 test("runHeadlessAgent falls back without --json-schema when grok rejects the flag", async () => {

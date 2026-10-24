@@ -203,6 +203,63 @@ test("critique fallback refuses narration instead of brace-slicing a verdict out
   assert.match(payload.rawOutput, /^I read the diff/);
 });
 
+test("critique reads the review from structured_output on the message stream", () => {
+  const { repo, binDir, pluginDataDir, fakeGrokLog } = setupReviewableRepo();
+
+  const result = run("node", [SCRIPT, "critique", "--json", "focus on docs"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir, { FAKE_GROK_LOG: fakeGrokLog })
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.result?.verdict, "approve");
+  assert.equal(payload.parseError, null);
+  const argv = lastFakeGrokArgv(fakeGrokLog);
+  assert.ok(argv.includes("--json-schema"));
+  assert.equal(argv[argv.indexOf("--output-format") + 1], "streaming-messages-json");
+});
+
+test("critique takes structured_output when the final message has no text", () => {
+  const { repo, binDir, pluginDataDir } = setupReviewableRepo("schema-no-text");
+
+  const result = run("node", [SCRIPT, "critique", "--json", "focus on docs"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.result?.verdict, "approve");
+});
+
+test("critique fails closed when the result event carries no structured_output", () => {
+  const { repo, binDir, pluginDataDir } = setupReviewableRepo("schema-no-structured");
+
+  const result = run("node", [SCRIPT, "critique", "--json", "focus on docs"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.result, null);
+  assert.match(payload.parseError, /structured_output/);
+});
+
+test("critique refuses a successful result event when grok exits non-zero", () => {
+  const { repo, binDir, pluginDataDir } = setupReviewableRepo("stop-hook-fails");
+
+  const result = run("node", [SCRIPT, "critique", "--json", "focus on docs"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.notEqual(result.status, 0);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.result, null);
+  assert.match(payload.parseError, /Stop hook failed/);
+});
+
 test("critique forwards --model and --effort to grok", () => {
   const { repo, binDir, pluginDataDir, fakeGrokLog } = setupReviewableRepo();
 

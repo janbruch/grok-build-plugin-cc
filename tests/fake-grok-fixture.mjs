@@ -7,7 +7,7 @@ import { writeExecutable } from "./helpers.mjs";
 /**
  * Install a fake `grok` binary that responds to version/models/-p/import for hermetic tests.
  * @param {string} binDir directory that will be prepended to PATH
- * @param {"default"|"not-logged-in"|"not-authenticated"|"fail-print"|"import-ok"|"reject-json-schema"|"reject-json-schema-narration"|"api-key"|"deployment-key"} scenario
+ * @param {"default"|"not-logged-in"|"not-authenticated"|"fail-print"|"import-ok"|"reject-json-schema"|"reject-json-schema-narration"|"schema-no-text"|"schema-no-structured"|"stop-hook-fails"|"api-key"|"deployment-key"} scenario
  */
 export function installFakeGrok(binDir, scenario = "default") {
   fs.mkdirSync(binDir, { recursive: true });
@@ -106,8 +106,10 @@ if (isPrint || hasFlag("-r") || hasFlag("--resume") || hasFlag("-c") || hasFlag(
   // Three output shapes, and the differences are the whole point. Each one is
   // modelled on grok 1.0.41 as observed, because a fake that is kinder than the
   // CLI passes code the CLI breaks.
-  //   --json-schema        the model is constrained to the schema, and the
-  //                        schema is the ROOT of stdout.
+  //   --json-schema        constrains the model to the schema. It does not
+  //                        change the format: the object is carried beside the
+  //                        text, as .structuredOutput on the json envelope and
+  //                        as .structured_output on the stream's result event.
   //   --output-format json one envelope, reasoning under .thought. Its .text
   //                        joins every assistant text block of every turn with
   //                        no separator, so narration arrives welded to the
@@ -120,11 +122,12 @@ if (isPrint || hasFlag("-r") || hasFlag("--resume") || hasFlag("-c") || hasFlag(
   // schema (the fallback when --json-schema is rejected) is not answered at
   // the root.
   const wantsSchema = hasFlag("--json-schema");
-  const format = wantsSchema ? "schema" : flagValue("--output-format");
+  const format = flagValue("--output-format");
   // What an agent says before it uses a tool. It is not the answer.
   const narration = "I'll look at the request before answering.";
 
   let answer;
+  let structured;
   if (wantsSchema || /critique|adversarial|structured|Return only valid JSON/i.test(prompt)) {
     const payload = {
       verdict: "approve",
@@ -133,6 +136,9 @@ if (isPrint || hasFlag("-r") || hasFlag("--resume") || hasFlag("-c") || hasFlag(
       next_steps: ["Ship it."]
     };
     answer = JSON.stringify(payload) + "\\n";
+    if (wantsSchema) {
+      structured = payload;
+    }
     if (scenario === "reject-json-schema-narration") {
       // An unconstrained model narrating around an example of the shape.
       answer = "I read the diff. A review would look like " + JSON.stringify(payload) + " but I have concerns.\\n";
@@ -154,7 +160,8 @@ if (isPrint || hasFlag("-r") || hasFlag("--resume") || hasFlag("-c") || hasFlag(
         stopReason: "end_turn",
         sessionId,
         thought: reasoning,
-        usage: { input_tokens: 1, output_tokens: 1 }
+        usage: { input_tokens: 1, output_tokens: 1 },
+        ...(structured ? { structuredOutput: structured } : {})
       }) + "\\n"
     );
   } else if (format === "streaming-messages-json") {
@@ -179,14 +186,30 @@ if (isPrint || hasFlag("-r") || hasFlag("--resume") || hasFlag("-c") || hasFlag(
       },
       {
         type: "assistant",
-        message: { role: "assistant", content: [{ type: "text", text: answer.trimEnd() }] },
+        message: {
+          role: "assistant",
+          // A structured run's final frame can carry no text block at all.
+          content: scenario === "schema-no-text" ? [{ type: "thinking", thinking: reasoning }] : [{ type: "text", text: answer.trimEnd() }]
+        },
         session_id: sessionId
       },
-      { type: "result", subtype: "success", is_error: false, result: answer.trimEnd(), session_id: sessionId }
+      {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: scenario === "schema-no-text" ? "" : answer.trimEnd(),
+        session_id: sessionId,
+        ...(structured && scenario !== "schema-no-structured" ? { structured_output: structured } : {})
+      }
     ];
     process.stdout.write(events.map((event) => JSON.stringify(event)).join("\\n") + "\\n");
   } else {
     process.stdout.write(answer);
+  }
+  if (scenario === "stop-hook-fails") {
+    // The run completed and reported success, then a Stop hook failed it.
+    process.stderr.write("Stop hook failed\\n");
+    process.exit(1);
   }
   process.exit(0);
 }
