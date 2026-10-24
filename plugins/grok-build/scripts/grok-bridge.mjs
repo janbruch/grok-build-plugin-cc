@@ -62,7 +62,8 @@ import {
   renderSetupReport,
   renderStatusReport,
   renderStoredJobResult,
-  renderTaskResult
+  renderTaskResult,
+  validateReviewResultShape
 } from "./lib/render.mjs";
 
 const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -261,7 +262,11 @@ function structuredOutputFor(result, fallback) {
     return refuse(answer);
   }
   try {
-    return { ...fallback, parsed: JSON.parse(answer.text), parseError: null, rawOutput: answer.text };
+    const value = JSON.parse(answer.text);
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return { ...fallback, parsed: null, parseError: "structured answer is not a JSON object", rawOutput: answer.text };
+    }
+    return { ...fallback, parsed: value, parseError: null, rawOutput: answer.text };
   } catch (error) {
     return {
       ...fallback,
@@ -441,6 +446,11 @@ async function executeReviewRun(request) {
       status: result.status,
       failureMessage: result.stderr
     });
+    // A review that could not be read, or is not shaped like one, is a failed
+    // command, the same rule the plain review and run paths apply, and the
+    // payload says why rather than carrying the unusable value as the result.
+    const reviewError = parsed.parseError || validateReviewResultShape(parsed.parsed);
+    const exitStatus = result.status === 0 && reviewError ? 1 : result.status;
     const payload = {
       review: reviewName,
       target,
@@ -455,13 +465,13 @@ async function executeReviewRun(request) {
         stderr: result.stderr,
         stdout: result.finalMessage
       },
-      result: parsed.parsed,
+      result: reviewError ? null : parsed.parsed,
       rawOutput: parsed.rawOutput,
-      parseError: parsed.parseError
+      parseError: reviewError || null
     };
 
     return {
-      exitStatus: result.status,
+      exitStatus,
       threadId: result.threadId,
       turnId: null,
       payload,
@@ -469,10 +479,7 @@ async function executeReviewRun(request) {
         reviewLabel: reviewName,
         targetLabel: context.target.label
       }),
-      summary:
-        parsed.parsed?.summary ??
-        parsed.parseError ??
-        firstMeaningfulLine(result.finalMessage, `${reviewName} finished.`),
+      summary: reviewError || parsed.parsed.summary,
       jobTitle: `Grok Build ${reviewName}`,
       jobClass: "review",
       targetLabel: context.target.label

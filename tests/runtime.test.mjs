@@ -197,10 +197,62 @@ test("critique fallback refuses narration instead of brace-slicing a verdict out
     env: pluginDataEnv(pluginDataDir, binDir, { FAKE_GROK_LOG: fakeGrokLog })
   });
 
+  assert.equal(result.status, 1, "a refused review is a failed command");
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.result, null);
   assert.ok(payload.parseError);
   assert.match(payload.rawOutput, /^I read the diff/);
+});
+
+test("critique fallback exits non-zero when the final block parses to a non-review", () => {
+  const { repo, binDir, pluginDataDir } = setupReviewableRepo("reject-json-schema-array");
+
+  const result = run("node", [SCRIPT, "critique", "--json", "focus on docs"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.result, null);
+  assert.match(payload.parseError, /not a JSON object/);
+});
+
+test("a critique that returns no review records why as its job summary", () => {
+  const { repo, binDir, pluginDataDir } = setupReviewableRepo("reject-json-schema-array");
+
+  const result = run("node", [SCRIPT, "critique", "focus on docs"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+  assert.equal(result.status, 1, result.stderr);
+
+  const previous = process.env.CLAUDE_PLUGIN_DATA;
+  process.env.CLAUDE_PLUGIN_DATA = pluginDataDir;
+  try {
+    const [job] = listJobs(repo);
+    assert.match(job.summary, /not a JSON object/);
+  } finally {
+    if (previous == null) {
+      delete process.env.CLAUDE_PLUGIN_DATA;
+    } else {
+      process.env.CLAUDE_PLUGIN_DATA = previous;
+    }
+  }
+});
+
+test("critique exits non-zero when structured_output has the wrong shape", () => {
+  const { repo, binDir, pluginDataDir } = setupReviewableRepo("schema-wrong-shape");
+
+  const result = run("node", [SCRIPT, "critique", "--json", "focus on docs"], {
+    cwd: repo,
+    env: pluginDataEnv(pluginDataDir, binDir)
+  });
+
+  assert.equal(result.status, 1, `${result.stdout}\n${result.stderr}`);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.result, null);
+  assert.match(payload.parseError, /Missing string `verdict`/);
 });
 
 test("critique reads the review from structured_output on the message stream", () => {
@@ -241,6 +293,7 @@ test("critique fails closed when the result event carries no structured_output",
     env: pluginDataEnv(pluginDataDir, binDir)
   });
 
+  assert.equal(result.status, 1, "a refused review is a failed command");
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.result, null);
   assert.match(payload.parseError, /structured_output/);

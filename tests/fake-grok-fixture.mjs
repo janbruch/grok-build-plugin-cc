@@ -7,7 +7,7 @@ import { writeExecutable } from "./helpers.mjs";
 /**
  * Install a fake `grok` binary that responds to version/models/-p/import for hermetic tests.
  * @param {string} binDir directory that will be prepended to PATH
- * @param {"default"|"not-logged-in"|"not-authenticated"|"fail-print"|"import-ok"|"reject-json-schema"|"reject-json-schema-narration"|"schema-no-text"|"schema-no-structured"|"stop-hook-fails"|"api-key"|"deployment-key"} scenario
+ * @param {"default"|"not-logged-in"|"not-authenticated"|"fail-print"|"import-ok"|"reject-json-schema"|"reject-json-schema-narration"|"reject-json-schema-array"|"schema-no-text"|"schema-no-structured"|"schema-wrong-shape"|"stop-hook-fails"|"api-key"|"deployment-key"} scenario
  */
 export function installFakeGrok(binDir, scenario = "default") {
   fs.mkdirSync(binDir, { recursive: true });
@@ -137,7 +137,12 @@ if (isPrint || hasFlag("-r") || hasFlag("--resume") || hasFlag("-c") || hasFlag(
     };
     answer = JSON.stringify(payload) + "\\n";
     if (wantsSchema) {
-      structured = payload;
+      // Valid JSON, wrong shape: the schema has no say over what the bridge validates.
+      structured = scenario === "schema-wrong-shape" ? { summary: "No verdict here." } : payload;
+    }
+    if (scenario === "reject-json-schema-array") {
+      // Parses, and is not a review object.
+      answer = "[]\\n";
     }
     if (scenario === "reject-json-schema-narration") {
       // An unconstrained model narrating around an example of the shape.
